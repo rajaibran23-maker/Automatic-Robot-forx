@@ -1,0 +1,75 @@
+
+name: Build GridBot APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android SDK packages
+        run: |
+          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)
+          test -x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses || true
+          "$SDKMANAGER" --install "platforms;android-36" "build-tools;36.0.0"
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Check ZIP file
+        run: test -f GridBot_Android_APK_Build_Ready.zip
+
+      - name: Unpack project ZIP
+        run: unzip -q GridBot_Android_APK_Build_Ready.zip -d source
+
+      - name: Find Android project
+        run: |
+          APP_GRADLE=$(find source -type f -path '*/app/build.gradle.kts' -print -quit)
+          if [ -z "$APP_GRADLE" ]; then
+            echo "ERROR: app/build.gradle.kts not found in ZIP"
+            find source -maxdepth 5 -type f | head -100
+            exit 1
+          fi
+          PROJECT_DIR=$(dirname "$(dirname "$APP_GRADLE")")
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Found Android project: $PROJECT_DIR"
+      - name: Create debug signing key
+        run: |
+          cd "$PROJECT_DIR"
+          keytool -genkeypair -v -keystore debug.keystore \
+            -storepass android -alias androiddebugkey \
+            -keypass android -keyalg RSA -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+      - name: Build APK
+        run: |
+          cd "$PROJECT_DIR"
+          gradle --no-daemon :app:assembleDebug
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: GridBot-debug-apk
+          path: source/**/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
